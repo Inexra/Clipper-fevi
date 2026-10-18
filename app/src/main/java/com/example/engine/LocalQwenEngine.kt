@@ -25,7 +25,40 @@ object LocalQwenEngine {
 
     fun isModelDownloaded(context: Context): Boolean {
         val file = modelFile(context)
-        return file.exists() && file.length() > 100_000_000L
+        return file.exists() && file.length() > 400_000_000L
+    }
+
+    fun isModelAvailable(context: Context): Boolean =
+        isModelDownloaded(context) || runCatching {
+            context.assets.open("models/$MODEL_NAME").close()
+            true
+        }.getOrDefault(false)
+
+    private suspend fun prepareModelFile(context: Context): File = withContext(Dispatchers.IO) {
+        val destination = modelFile(context)
+        if (destination.exists() && destination.length() > 400_000_000L) return@withContext destination
+        destination.parentFile?.mkdirs()
+        val bundled = runCatching { context.assets.open("models/$MODEL_NAME") }.getOrNull()
+        if (bundled != null) {
+            bundled.use { input ->
+                destination.outputStream().buffered().use { output ->
+                    val buffer = ByteArray(1024 * 1024)
+                    var copied = 0L
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        copied += count
+                    }
+                    if (copied < 400_000_000L) {
+                        destination.delete()
+                        throw IllegalStateException("Bundled Qwen model is incomplete.")
+                    }
+                }
+            }
+            return@withContext destination
+        }
+        throw IllegalStateException("The bundled Qwen model is missing. Rebuild the APK with the offline model assets.")
     }
 
     suspend fun downloadModel(
@@ -33,7 +66,29 @@ object LocalQwenEngine {
         onProgress: (Float) -> Unit = {}
     ): File = withContext(Dispatchers.IO) {
         val destination = modelFile(context)
-        if (isModelDownloaded(context)) return@withContext destination
+        if (destination.exists() && destination.length() > 400_000_000L) return@withContext destination
+        val bundled = runCatching { context.assets.open("models/$MODEL_NAME") }.getOrNull()
+        if (bundled != null) {
+            destination.parentFile?.mkdirs()
+            bundled.use { input ->
+                destination.outputStream().buffered().use { output ->
+                    val buffer = ByteArray(1024 * 1024)
+                    var copied = 0L
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        copied += count
+                        onProgress((copied.toFloat() / 491_400_032f).coerceIn(0f, 1f))
+                    }
+                    if (copied < 400_000_000L) {
+                        destination.delete()
+                        throw IllegalStateException("Bundled Qwen model is incomplete.")
+                    }
+                }
+            }
+            return@withContext destination
+        }
         destination.parentFile?.mkdirs()
         val partial = File(destination.parentFile, "$MODEL_NAME.part")
         val connection = (URL(MODEL_URL).openConnection() as HttpURLConnection).apply {
@@ -81,8 +136,7 @@ object LocalQwenEngine {
 
     suspend fun generateText(context: Context, prompt: String, maxTokens: Int = 256): String =
         withContext(Dispatchers.IO) {
-            val file = modelFile(context)
-            require(isModelDownloaded(context)) { "Download the Qwen model in Settings before using local AI." }
+            val file = prepareModelFile(context)
             val model = Llama.loadModel(
                 modelPath = file.absolutePath,
                 config = LlamaConfig(contextSize = 2048, threads = 2)
@@ -101,7 +155,7 @@ object LocalQwenEngine {
 
 
     suspend fun rankCandidates(context: Context, candidates: List<ClipCandidate>): List<ClipCandidate> {
-        if (!isModelDownloaded(context) || candidates.size < 2 || candidates.all { it.subtitles.isEmpty() }) return candidates
+        if (!isModelAvailable(context) || candidates.size < 2 || candidates.all { it.subtitles.isEmpty() }) return candidates
         val descriptions = candidates.mapIndexed { index, clip ->
             "$index | ${clip.startMs / 1000}s-${clip.endMs / 1000}s | ${clip.subtitles.joinToString(" ") { it.text }.take(450)}"
         }.joinToString("\n")
