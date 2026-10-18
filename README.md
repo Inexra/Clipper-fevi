@@ -65,6 +65,20 @@ Optimized specifically for mid-range Android devices, including the **Motorola M
 
 ---
 
+
+
+## 🧠 Offline AI models (no API key required)
+
+Fevi can run its text intelligence and English speech recognition locally after the models are downloaded:
+
+- **Qwen2.5-0.5B-Instruct Q4_K_M** (about 400 MB): open **Settings & Privacy → Offline AI models → Download Qwen model**. Qwen is used to rank transcript-based clip candidates and generate titles, descriptions, hashtags, keywords, summaries, thumbnail text and pinned comments.
+- **Whisper Tiny English INT8** (about 105 MB): downloaded automatically the first time you run transcription. It recognizes the video's actual audio locally and creates timestamped transcript sections for captions and clip selection.
+- The models are stored in app-private storage, not bundled into the APK. Allow enough free storage and use a stable connection for the first download. Once downloaded, model inference can run offline.
+- The English Whisper model is currently English-only. The first run may take longer, and performance depends on the phone's CPU and available memory. Qwen inference uses a small context and CPU threads to reduce memory pressure.
+- If Qwen is not downloaded or inference fails, the app falls back to transcript-based local metadata. It does not fabricate dialogue as a substitute for speech recognition.
+
+The app's source video and transcript are processed on the device by these local engines. Model downloads require internet access only for the initial download.
+
 ## 🚀 Building & Downloading APK via GitHub Actions
 
 This repository includes a production-grade GitHub Actions workflow configured at `.github/workflows/android-apk.yml`.
