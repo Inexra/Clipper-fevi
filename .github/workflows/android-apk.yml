@@ -44,6 +44,20 @@ jobs:
       - name: Ensure Gradle Wrapper Executable
         run: chmod +x gradlew
 
+      # app/build.gradle.kts explicitly expects this debug keystore at the repository root.
+      # Generate a standard throwaway CI debug key; never use it for release signing.
+      - name: Create CI Debug Keystore
+        run: |
+          keytool -genkeypair -v \\
+            -keystore debug.keystore \\
+            -storepass android \\
+            -alias androiddebugkey \\
+            -keypass android \\
+            -keyalg RSA \\
+            -keysize 2048 \\
+            -validity 10000 \\
+            -dname "CN=Android Debug,O=Android,C=US"
+
       # The model weights are fetched during CI and packed into the APK's assets.
       # They are intentionally not committed to Git because they total roughly 600 MB.
       - name: Bundle offline AI models into APK
