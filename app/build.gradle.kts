@@ -63,6 +63,10 @@ android {
     compose = true
     buildConfig = true
   }
+  // Large AI weights are already quantized; avoid wasting build time compressing them.
+  androidResources {
+    noCompress += listOf("gguf", "onnx")
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
