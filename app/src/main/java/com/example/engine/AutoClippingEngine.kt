@@ -95,7 +95,8 @@ object AutoClippingEngine {
                 aspectRatio = config.aspectRatio,
                 status = ClipStatus.DISCOVERED,
                 subtitles = cand.segments,
-                srtContent = SubtitleGenerator.toSrt(cand.segments, start)
+                srtContent = SubtitleGenerator.toSrt(cand.segments, start),
+                metadata = LocalMetadataGenerator.generate(cand.segments)
             )
         }
     }
@@ -188,7 +189,8 @@ object AutoClippingEngine {
                 reasonWhySelected = cand.reason, score = cand.score,
                 aspectRatio = config.aspectRatio, status = ClipStatus.DISCOVERED,
                 subtitles = cand.segments,
-                srtContent = SubtitleGenerator.toSrt(cand.segments, cand.startMs)
+                srtContent = SubtitleGenerator.toSrt(cand.segments, cand.startMs),
+                metadata = LocalMetadataGenerator.generate(cand.segments)
             )
         }
     }
