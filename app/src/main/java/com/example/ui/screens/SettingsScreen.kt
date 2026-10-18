@@ -98,7 +98,7 @@ fun SettingsScreen(
     var qwenProgress by remember { mutableStateOf(0f) }
     var qwenError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) { qwenReady = LocalQwenEngine.isModelDownloaded(context) }
+    LaunchedEffect(Unit) { qwenReady = LocalQwenEngine.isModelAvailable(context) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     val savedApiKey by viewModel.geminiApiKey.collectAsStateWithLifecycle()
@@ -147,9 +147,9 @@ fun SettingsScreen(
                         }
                         Text(
                             text = if (qwenReady)
-                                "Qwen2.5 0.5B is downloaded. Local text generation can work without a Gemini API key."
+                                "Qwen2.5 0.5B is bundled in this APK. First use copies it into app storage; local text generation then works without a Gemini API key."
                             else
-                                "Download Qwen2.5 0.5B Instruct (about 400 MB) once. After download, text generation works offline. Keep at least 1 GB free storage.",
+                                "Qwen2.5 0.5B is normally included in the APK (~491 MB). If this build has the model assets, they are prepared locally without internet. Keep at least 1 GB free storage.",
                             color = TextSecondary, fontSize = 12.sp
                         )
                         if (qwenDownloading) {
@@ -177,7 +177,7 @@ fun SettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color.Black)
                         ) {
-                            Text(if (qwenReady) "Qwen model ready" else if (qwenDownloading) "Downloading…" else "Download Qwen model")
+                            Text(if (qwenReady) "Qwen model bundled / ready" else if (qwenDownloading) "Preparing model…" else "Prepare offline Qwen model")
                         }
                     }
                 }
