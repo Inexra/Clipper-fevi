@@ -41,6 +41,26 @@ object OfflineWhisperEngine {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             val dir = modelDir(context)
             dir.mkdirs()
+            val bundledFiles = listOf(
+                "tiny.en-encoder.int8.onnx",
+                "tiny.en-decoder.int8.onnx",
+                "tiny.en-tokens.txt"
+            )
+            val bundled = bundledFiles.all { name ->
+                runCatching { context.assets.open("models/whisper-tiny-en/$name").close(); true }.getOrDefault(false)
+            }
+            if (bundled) {
+                bundledFiles.forEachIndexed { index, name ->
+                    val target = File(dir, name)
+                    if (!target.exists() || target.length() < if (index == 0) 10_000_000L else if (index == 1) 80_000_000L else 100_000L) {
+                        context.assets.open("models/whisper-tiny-en/$name").buffered().use { input ->
+                            target.outputStream().buffered().use { output -> input.copyTo(output) }
+                        }
+                    }
+                    onProgress((index + 1) / 3f)
+                }
+                return@withContext
+            }
             val files = listOf(
                 "tiny.en-encoder.int8.onnx" to 0.12f,
                 "tiny.en-decoder.int8.onnx" to 0.84f,
@@ -137,11 +157,21 @@ object OfflineWhisperEngine {
                 try {
                     stream.acceptWaveform(samples, RATE)
                     recognizer.decode(stream)
-                    val text = recognizer.getResult(stream).text.trim()
+                    val recognition = recognizer.getResult(stream)
+                    val text = recognition.text.trim()
                     if (text.isNotBlank()) {
                         val startMs = chunkIndex * CHUNK_SECONDS * 1000L
                         val endMs = min((pcm.size.toLong() * 1000L / bytesPerSecond), startMs + sampleCount * 1000L / RATE)
-                        result += splitChunkIntoSegments(text, startMs, max(startMs + 500L, endMs), result.size + 1)
+                        val chunkSegments = segmentsFromAlignment(
+                            tokens = recognition.tokens,
+                            timestamps = recognition.timestamps,
+                            durations = recognition.durations,
+                            chunkStartMs = startMs,
+                            chunkEndMs = max(startMs + 500L, endMs),
+                            firstId = result.size + 1
+                        )
+                        result += if (chunkSegments.isNotEmpty()) chunkSegments
+                            else splitChunkIntoSegments(text, startMs, max(startMs + 500L, endMs), result.size + 1)
                     }
                 } finally {
                     stream.release()
@@ -153,6 +183,85 @@ object OfflineWhisperEngine {
         }
         if (result.isEmpty()) throw IllegalStateException("Whisper did not detect intelligible speech in this audio.")
         result
+    }
+
+    private data class TimedWord(val text: String, val startMs: Long, val endMs: Long)
+
+    /**
+     * Uses Whisper's cross-attention/DTW token alignment. Word boundaries are formed from
+     * token whitespace, so subtitle timings follow speech instead of spreading text over a chunk.
+     */
+    private fun segmentsFromAlignment(
+        tokens: Array<String>,
+        timestamps: FloatArray,
+        durations: FloatArray,
+        chunkStartMs: Long,
+        chunkEndMs: Long,
+        firstId: Int
+    ): List<TranscriptSegment> {
+        if (tokens.isEmpty() || timestamps.isEmpty()) return emptyList()
+        val words = mutableListOf<TimedWord>()
+        val current = StringBuilder()
+        var wordStart = chunkStartMs
+        var wordEnd = chunkStartMs
+        fun flushWord() {
+            val value = current.toString().trim().trim('▁', 'Ġ')
+            if (value.isNotBlank()) {
+                val start = wordStart.coerceIn(chunkStartMs, chunkEndMs)
+                val end = wordEnd.coerceIn(start + 1L, chunkEndMs.coerceAtLeast(start + 1L))
+                words += TimedWord(value, start, end)
+            }
+            current.setLength(0)
+        }
+        tokens.forEachIndexed { index, rawToken ->
+            if (rawToken.startsWith("<|") && rawToken.endsWith("|>")) return@forEachIndexed
+            val token = rawToken.replace("▁", " ").replace("Ġ", " ")
+            if (token.isBlank()) return@forEachIndexed
+            val start = chunkStartMs + ((timestamps.getOrNull(index) ?: 0f).coerceAtLeast(0f) * 1000f).toLong()
+            val duration = ((durations.getOrNull(index) ?: 0.08f).coerceAtLeast(0.02f) * 1000f).toLong()
+            val end = (start + duration).coerceAtMost(chunkEndMs)
+            val hasLeadingSpace = token.first().isWhitespace()
+            if (hasLeadingSpace && current.isNotEmpty()) flushWord()
+            val parts = token.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+            parts.forEachIndexed { partIndex, part ->
+                if (partIndex > 0 && current.isNotEmpty()) flushWord()
+                if (current.isEmpty()) wordStart = start
+                current.append(part)
+                wordEnd = max(start + 20L, end)
+                if (part.lastOrNull() in listOf('.', '!', '?', ',', ';', ':')) {
+                    // Commas stay in the word; sentence grouping below decides whether to split.
+                    flushWord()
+                }
+            }
+        }
+        flushWord()
+        if (words.isEmpty()) return emptyList()
+
+        val sentenceGroups = mutableListOf<List<TimedWord>>()
+        var group = mutableListOf<TimedWord>()
+        words.forEach { word ->
+            group += word
+            val sentenceEnd = word.text.endsWith(".") || word.text.endsWith("!") || word.text.endsWith("?")
+            if (sentenceEnd || group.size >= 12) {
+                sentenceGroups += group.toList()
+                group = mutableListOf()
+            }
+        }
+        if (group.isNotEmpty()) sentenceGroups += group.toList()
+        return sentenceGroups.mapIndexed { index, sentenceWords ->
+            val start = sentenceWords.first().startMs
+            val end = sentenceWords.last().endMs.coerceAtLeast(start + 1L)
+            val sentence = sentenceWords.joinToString(" ") { it.text }
+            TranscriptSegment(
+                id = firstId + index,
+                startMs = start,
+                endMs = end,
+                text = sentence,
+                words = sentenceWords.map { WordTiming(it.text, it.startMs, it.endMs) },
+                hookScore = if (sentence.contains(Regex("\\b(why|how|secret|never|surprise|important)\\b", RegexOption.IGNORE_CASE))) 82f else 55f,
+                speechEnergy = 0.5f
+            )
+        }
     }
 
     private fun splitChunkIntoSegments(text: String, startMs: Long, endMs: Long, firstId: Int): List<TranscriptSegment> {
