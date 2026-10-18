@@ -89,9 +89,10 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 dependencies {
   // Local-only inference: Qwen GGUF LLM and sherpa-onnx speech recognition.
   implementation("dev.ffmpegkit-maintained:llama-android:0.1.1")
-  // The Android AAR already provides these classes; exclude the duplicate JVM JAR
-  // to prevent D8 duplicate-class errors during APK packaging.
-  implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8") {
+  // Keep the Android AAR (including native libraries), but exclude the duplicate
+  // JVM-only artifact wherever it enters the app's dependency graph.
+  implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8")
+  configurations.configureEach {
     exclude(group = "com.github.k2-fsa", module = "sherpa-onnx-jvm")
   }
   implementation(platform(libs.androidx.compose.bom))
