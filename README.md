@@ -65,6 +65,19 @@ Optimized specifically for mid-range Android devices, including the **Motorola M
 
 ---
 
+
+
+## 🧠 Offline AI models (bundled in the APK)
+
+The GitHub Actions build downloads and packages both model families into the APK's assets, so the resulting APK is large (roughly **600 MB**, depending on model files) but does not need to download model weights on first launch:
+
+- **Qwen2.5-0.5B-Instruct Q4_K_M** (491 MB): runs local transcript-based clip ranking and can generate titles, descriptions, hashtags, keywords, summaries, thumbnail text and pinned comments.
+- **Whisper Tiny English INT8** (about 105 MB): recognizes the video's actual English speech locally. The subtitle engine uses Whisper's token-level cross-attention/DTW timestamps to align words to speech, then groups the aligned words into subtitle sentences. If alignment data is unavailable, it falls back to approximate sentence timing rather than inventing dialogue.
+- The model files are fetched by the CI workflow and are intentionally not committed to Git history. They are included in the built APK under `assets/models`. On first use, each model is copied from APK assets into app-private storage because the native inference engines need normal file paths; this requires extra free space (keep at least **1.5 GB free**).
+- **No paid API is required** for local transcription or Qwen text generation. Whisper is currently English-only. Local inference speed depends on device CPU and available memory; processing longer videos may take time.
+
+The source video and transcript stay on the device. The bundled model weights require internet only when GitHub Actions builds the APK, not when the user runs the installed app.
+
 ## 🚀 Building & Downloading APK via GitHub Actions
 
 This repository includes a production-grade GitHub Actions workflow configured at `.github/workflows/android-apk.yml`.
@@ -75,7 +88,7 @@ This repository includes a production-grade GitHub Actions workflow configured a
 2. Under **All workflows**, select the latest **Android APK Build** run.
 3. Once the build finishes successfully (marked with a green checkmark):
    - Scroll down to the **Artifacts** section at the bottom of the workflow summary page.
-   - Click on **`fevi-ai-clipper-debug-apk`** to download the ZIP file containing the debug `.apk`.
+   - Click on **`fevi-ai-clipper-debug-apk-with-offline-models`** to download the ZIP file containing the debug `.apk`.
    - Extract the `.apk` and install it directly on your Android device (or via ADB: `adb install -r app-debug.apk`).
 
 ---

@@ -15,7 +15,7 @@ jobs:
   build:
     name: Build Debug APK & Run Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
 
     steps:
       - name: Checkout Repository
@@ -29,6 +29,8 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
 
       - name: Accept Android SDK Licenses
         run: |
@@ -42,6 +44,31 @@ jobs:
       - name: Ensure Gradle Wrapper Executable
         run: chmod +x gradlew
 
+      # app/build.gradle.kts explicitly expects this debug keystore at the repository root.
+      # Generate a standard throwaway CI debug key; never use it for release signing.
+      - name: Create CI Debug Keystore
+        run: keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+      # The model weights are fetched during CI and packed into the APK's assets.
+      # They are intentionally not committed to Git because they total roughly 600 MB.
+      - name: Bundle offline AI models into APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL_DIR="app/src/main/assets/models"
+          mkdir -p "$MODEL_DIR/whisper-tiny-en"
+          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 \
+            "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf" \
+            -o "$MODEL_DIR/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+          echo "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db  $MODEL_DIR/qwen2.5-0.5b-instruct-q4_k_m.gguf" | sha256sum --check
+          BASE="https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny.en/resolve/main"
+          curl --fail --location --retry 5 --retry-all-errors "$BASE/tiny.en-encoder.int8.onnx" -o "$MODEL_DIR/whisper-tiny-en/tiny.en-encoder.int8.onnx"
+          curl --fail --location --retry 5 --retry-all-errors "$BASE/tiny.en-decoder.int8.onnx" -o "$MODEL_DIR/whisper-tiny-en/tiny.en-decoder.int8.onnx"
+          curl --fail --location --retry 5 --retry-all-errors "$BASE/tiny.en-tokens.txt" -o "$MODEL_DIR/whisper-tiny-en/tiny.en-tokens.txt"
+          test "$(stat -c%s "$MODEL_DIR/whisper-tiny-en/tiny.en-encoder.int8.onnx")" -gt 10000000
+          test "$(stat -c%s "$MODEL_DIR/whisper-tiny-en/tiny.en-decoder.int8.onnx")" -gt 80000000
+          test "$(stat -c%s "$MODEL_DIR/whisper-tiny-en/tiny.en-tokens.txt")" -gt 100000
+          du -h "$MODEL_DIR" "$MODEL_DIR/whisper-tiny-en"
+
       - name: Run Unit Tests
         run: ./gradlew testDebugUnitTest --continue --stacktrace
 
@@ -52,7 +79,7 @@ jobs:
         id: apk-locator
         run: |
           echo "Finding generated APKs..."
-          find app/build/outputs/apk/ -name "*.apk"
+          find app/build/outputs/apk/ -name "*.apk" -exec ls -lh {} \;
           APK_PATH=$(find app/build/outputs/apk/debug/ -name "*debug.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then
             echo "::error::Debug APK not found in expected output directory!"
@@ -64,7 +91,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fevi-ai-clipper-debug-apk
+          name: fevi-ai-clipper-debug-apk-with-offline-models
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 14
           if-no-files-found: error

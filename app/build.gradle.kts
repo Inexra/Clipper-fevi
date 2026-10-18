@@ -63,6 +63,10 @@ android {
     compose = true
     buildConfig = true
   }
+  // Large AI weights are already quantized; avoid wasting build time compressing them.
+  androidResources {
+    noCompress += listOf("gguf", "onnx")
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
@@ -83,6 +87,14 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
+  // Local-only inference: Qwen GGUF LLM and sherpa-onnx speech recognition.
+  implementation("dev.ffmpegkit-maintained:llama-android:0.1.1")
+  // Keep the Android AAR (including native libraries), but exclude the duplicate
+  // JVM-only artifact wherever it enters the app's dependency graph.
+  implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8")
+  configurations.configureEach {
+    exclude(group = "com.github.k2-fsa.sherpa-onnx", module = "sherpa-onnx-jvm")
+  }
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)

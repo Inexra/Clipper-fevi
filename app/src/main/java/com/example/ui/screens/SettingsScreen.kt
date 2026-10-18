@@ -54,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -80,6 +81,7 @@ import com.example.ui.theme.StudioSurfaceVariant
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.ClipperViewModel
+import com.example.engine.LocalQwenEngine
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -90,6 +92,13 @@ fun SettingsScreen(
     onBackClick: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var qwenReady by remember { mutableStateOf(false) }
+    var qwenDownloading by remember { mutableStateOf(false) }
+    var qwenProgress by remember { mutableStateOf(0f) }
+    var qwenError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) { qwenReady = LocalQwenEngine.isModelAvailable(context) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     val savedApiKey by viewModel.geminiApiKey.collectAsStateWithLifecycle()
@@ -125,6 +134,55 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+
+            item {
+                GlassCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    borderColor = NeonCyan.copy(alpha = 0.55f)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = NeonCyan)
+                            Text("Offline AI models", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        }
+                        Text(
+                            text = if (qwenReady)
+                                "Qwen2.5 0.5B is bundled in this APK. First use copies it into app storage; local text generation then works without a Gemini API key."
+                            else
+                                "Qwen2.5 0.5B is normally included in the APK (~491 MB). If this build has the model assets, they are prepared locally without internet. Keep at least 1 GB free storage.",
+                            color = TextSecondary, fontSize = 12.sp
+                        )
+                        if (qwenDownloading) {
+                            CircularProgressIndicator(progress = { qwenProgress.coerceIn(0f, 1f) }, color = NeonCyan)
+                            Text("Downloading model: ${(qwenProgress * 100).toInt()}%", color = TextSecondary, fontSize = 12.sp)
+                        }
+                        if (qwenError != null) Text(qwenError!!, color = NeonPink, fontSize = 12.sp)
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    qwenDownloading = true
+                                    qwenError = null
+                                    try {
+                                        LocalQwenEngine.downloadModel(context) { qwenProgress = it }
+                                        qwenReady = true
+                                        snackbarHostState.showSnackbar("Qwen model downloaded")
+                                    } catch (e: Exception) {
+                                        qwenError = e.localizedMessage ?: "Model download failed"
+                                    } finally {
+                                        qwenDownloading = false
+                                    }
+                                }
+                            },
+                            enabled = !qwenDownloading && !qwenReady,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color.Black)
+                        ) {
+                            Text(if (qwenReady) "Qwen model bundled / ready" else if (qwenDownloading) "Preparing model…" else "Prepare offline Qwen model")
+                        }
+                    }
+                }
+            }
+
             // Gemini API Key Card
             item {
                 GlassCard(

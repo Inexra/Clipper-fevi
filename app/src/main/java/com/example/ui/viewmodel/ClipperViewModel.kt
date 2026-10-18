@@ -23,6 +23,8 @@ import com.example.data.repository.ClipperRepository
 import com.example.engine.AudioSpeechEngine
 import com.example.engine.AutoClippingEngine
 import com.example.engine.MetadataGeneratorEngine
+import com.example.engine.LocalQwenEngine
+import com.example.engine.LocalMetadataGenerator
 import com.example.engine.SubtitleGenerator
 import com.example.engine.VideoClipperEngine
 import com.example.engine.VideoMetadataExtractor
@@ -233,12 +235,18 @@ class ClipperViewModel(application: Application) : AndroidViewModel(application)
                     progress = 0.65f
                 )
 
-                val candidates = AutoClippingEngine.findBestMoments(
+                val initialCandidates = AutoClippingEngine.findBestMoments(
                     projectId = projectId,
                     totalDurationMs = project.durationMs,
                     segments = analysis.segments,
                     config = config
                 )
+                val candidates = try {
+                    LocalQwenEngine.rankCandidates(getApplication(), initialCandidates)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Local Qwen ranking unavailable; using transcript heuristic ranking", e)
+                    initialCandidates
+                }
 
                 // 3. Generate Metadata for each candidate
                 _processingState.value = _processingState.value.copy(
@@ -248,12 +256,15 @@ class ClipperViewModel(application: Application) : AndroidViewModel(application)
 
                 val enriched = candidates.mapIndexed { idx, clip ->
                     val transcriptForClip = clip.subtitles.joinToString(" ") { it.text }
-                    val meta = MetadataGeneratorEngine.generateClipMetadata(
-                        clipTitle = clip.title,
-                        transcriptText = transcriptForClip,
-                        tone = MetadataTone.VIRAL_HOOK,
-                        customApiKey = customKey
-                    )
+                    val meta = if (LocalQwenEngine.isModelAvailable(getApplication())) {
+                        runCatching {
+                            LocalQwenEngine.generateMetadata(getApplication(), transcriptForClip, clip.title)
+                        }.getOrElse {
+                            LocalMetadataGenerator.generate(clip.subtitles, MetadataTone.VIRAL_HOOK)
+                        }
+                    } else {
+                        LocalMetadataGenerator.generate(clip.subtitles, MetadataTone.VIRAL_HOOK)
+                    }
                     clip.copy(metadata = meta)
                 }
 
@@ -330,12 +341,15 @@ class ClipperViewModel(application: Application) : AndroidViewModel(application)
 
                 val enriched = clips.map { clip ->
                     val transcriptForClip = clip.subtitles.joinToString(" ") { it.text }
-                    val meta = MetadataGeneratorEngine.generateClipMetadata(
-                        clipTitle = clip.title,
-                        transcriptText = transcriptForClip,
-                        tone = MetadataTone.VIRAL_HOOK,
-                        customApiKey = customKey
-                    )
+                    val meta = if (LocalQwenEngine.isModelAvailable(getApplication())) {
+                        runCatching {
+                            LocalQwenEngine.generateMetadata(getApplication(), transcriptForClip, clip.title)
+                        }.getOrElse {
+                            LocalMetadataGenerator.generate(clip.subtitles, MetadataTone.VIRAL_HOOK)
+                        }
+                    } else {
+                        LocalMetadataGenerator.generate(clip.subtitles, MetadataTone.VIRAL_HOOK)
+                    }
                     clip.copy(metadata = meta)
                 }
 
@@ -392,12 +406,13 @@ class ClipperViewModel(application: Application) : AndroidViewModel(application)
         val clip = _selectedClip.value ?: return
         viewModelScope.launch {
             val transcriptText = clip.subtitles.joinToString(" ") { it.text }
-            val newMeta = MetadataGeneratorEngine.generateClipMetadata(
-                clipTitle = clip.title,
-                transcriptText = transcriptText,
-                tone = tone,
-                customApiKey = geminiApiKey.value
-            )
+            val newMeta = if (LocalQwenEngine.isModelAvailable(getApplication())) {
+                runCatching {
+                    LocalQwenEngine.generateMetadata(getApplication(), transcriptText, clip.title)
+                }.getOrElse { LocalMetadataGenerator.generate(clip.subtitles, tone) }
+            } else {
+                LocalMetadataGenerator.generate(clip.subtitles, tone)
+            }
             val updated = clip.copy(metadata = newMeta)
             _selectedClip.value = updated
             _candidateClips.value = _candidateClips.value.map { if (it.id == clipId) updated else it }
