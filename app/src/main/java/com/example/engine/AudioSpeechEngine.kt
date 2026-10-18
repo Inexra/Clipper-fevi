@@ -53,30 +53,16 @@ object AudioSpeechEngine {
         try {
             onProgress("Extracting audio stream...", 0.15f)
 
-            // Step 1: Analyze audio track energy & silence boundaries using MediaExtractor
-            val pauseBoundaries = analyzeAudioPauses(context, videoUri, durationMs)
-
-            onProgress("Running speech recognition & timestamps...", 0.40f)
-
-            val effectiveApiKey = GeminiService.getEffectiveApiKey(customApiKey)
-            val segments = if (effectiveApiKey.isNotBlank() && durationMs in 1000..600000) {
-                // Try Gemini Speech / Audio Transcript with structured timestamps
-                val geminiResult = transcribeWithGemini(context, videoUri, durationMs, effectiveApiKey, language)
-                if (geminiResult.isSuccess && geminiResult.getOrNull()?.isNotEmpty() == true) {
-                    geminiResult.getOrNull()!!
-                } else {
-                    Log.w(TAG, "Gemini transcription fallback to acoustic on-device engine: ${geminiResult.exceptionOrNull()?.message}")
-                    generateAcousticSegments(pauseBoundaries, durationMs, language)
-                }
-            } else {
-                generateAcousticSegments(pauseBoundaries, durationMs, language)
-            }
+            // Never invent dialogue from waveform energy or a text-only Gemini prompt.
+            // A real offline ASR model is not yet bundled or initialized in this repository.
+            onProgress("No speech-recognition model configured", 0.85f)
+            val segments = emptyList<TranscriptSegment>()
 
             onProgress("Synthesizing word-level timings...", 0.85f)
             delay(150)
 
             val fullText = segments.joinToString(" ") { it.text }
-            val avgEnergy = segments.map { it.speechEnergy }.average().toFloat().coerceIn(0.1f, 1f)
+            val avgEnergy = segments.map { it.speechEnergy }.average().toFloat().takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
 
             Result.success(
                 AudioAnalysisResult(
