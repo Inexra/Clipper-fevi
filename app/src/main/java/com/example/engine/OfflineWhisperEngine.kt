@@ -140,7 +140,7 @@ object OfflineWhisperEngine {
                     val text = recognizer.getResult(stream).text.trim()
                     if (text.isNotBlank()) {
                         val startMs = chunkIndex * CHUNK_SECONDS * 1000L
-                        val endMs = min((pcm.size / bytesPerSecond * 1000L), startMs + sampleCount * 1000L / RATE)
+                        val endMs = min((pcm.size.toLong() * 1000L / bytesPerSecond), startMs + sampleCount * 1000L / RATE)
                         result += splitChunkIntoSegments(text, startMs, max(startMs + 500L, endMs), result.size + 1)
                     }
                 } finally {
