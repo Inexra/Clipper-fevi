@@ -10,9 +10,10 @@ import org.junit.Test
 class AutoClippingEngineFallbackTest {
     @Test
     fun fallbackClipsAreDistributedAcrossTheWholeVideo() {
+        val totalDurationMs = 20 * 60 * 1000L
         val clips = AutoClippingEngine.findBestMoments(
             projectId = 1L,
-            totalDurationMs = 20 * 60 * 1000L,
+            totalDurationMs = totalDurationMs,
             segments = emptyList(),
             config = AutoClippingEngine.ClippingConfig(
                 clipCount = 3,
@@ -21,10 +22,14 @@ class AutoClippingEngineFallbackTest {
         )
 
         assertEquals(3, clips.size)
-        assertTrue(clips[0].startMs < 60_000L)
-        assertTrue(clips[1].startMs in (5 * 60_000L)..(7 * 60_000L))
-        assertTrue(clips[2].startMs in (11 * 60_000L)..(13 * 60_000L))
-        assertTrue(clips[2].endMs <= 20 * 60 * 1000L)
+        val ordered = clips.sortedBy { it.startMs }
+        // The fallback samples the centre of each of three equal timeline slots.
+        assertTrue(ordered[0].startMs in (2 * 60_000L)..(4 * 60_000L))
+        assertTrue(ordered[1].startMs in (8 * 60_000L)..(11 * 60_000L))
+        assertTrue(ordered[2].startMs in (15 * 60_000L)..(18 * 60_000L))
+        assertTrue(ordered[2].endMs <= totalDurationMs)
+        assertTrue(ordered[1].startMs - ordered[0].startMs > 5 * 60_000L)
+        assertTrue(ordered[2].startMs - ordered[1].startMs > 5 * 60_000L)
     }
 
     @Test
