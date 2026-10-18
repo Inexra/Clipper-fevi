@@ -93,7 +93,7 @@ dependencies {
   // JVM-only artifact wherever it enters the app's dependency graph.
   implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8")
   configurations.configureEach {
-    exclude(group = "com.github.k2-fsa", module = "sherpa-onnx-jvm")
+    exclude(group = "com.github.k2-fsa.sherpa-onnx", module = "sherpa-onnx-jvm")
   }
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
