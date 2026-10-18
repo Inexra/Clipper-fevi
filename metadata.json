@@ -1,0 +1,6 @@
+{
+  "name": "Fevi AI Clipper",
+  "description": "Turn long videos into short-form clips with AI speech transcription, custom duration clipping, auto subtitles, and YouTube-ready metadata.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
