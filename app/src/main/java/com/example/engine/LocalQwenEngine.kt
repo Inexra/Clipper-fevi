@@ -101,7 +101,7 @@ object LocalQwenEngine {
 
 
     suspend fun rankCandidates(context: Context, candidates: List<ClipCandidate>): List<ClipCandidate> {
-        if (!isModelDownloaded(context) || candidates.size < 2) return candidates
+        if (!isModelDownloaded(context) || candidates.size < 2 || candidates.all { it.subtitles.isEmpty() }) return candidates
         val descriptions = candidates.mapIndexed { index, clip ->
             "$index | ${clip.startMs / 1000}s-${clip.endMs / 1000}s | ${clip.subtitles.joinToString(" ") { it.text }.take(450)}"
         }.joinToString("\n")
