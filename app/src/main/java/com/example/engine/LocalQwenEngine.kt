@@ -98,6 +98,39 @@ object LocalQwenEngine {
             }
         }
 
+
+    suspend fun rankCandidates(context: Context, candidates: List<ClipCandidate>): List<ClipCandidate> {
+        if (!isModelDownloaded(context) || candidates.size < 2) return candidates
+        val descriptions = candidates.mapIndexed { index, clip ->
+            "$index | ${clip.startMs / 1000}s-${clip.endMs / 1000}s | ${clip.subtitles.joinToString(" ") { it.text }.take(450)}"
+        }.joinToString("\n")
+        val prompt = """
+            Rank the following video transcript windows for a compelling short-form clip.
+            Prefer a strong opening hook, a coherent complete idea, useful or surprising information,
+            and a natural ending. Do not invent visual events. Return ONLY JSON: {"ranking":[0,2,1]}
+            where the numbers are the input indices, best first. Include each index once.
+            Windows:
+            $descriptions
+        """.trimIndent()
+        val raw = generateText(context, prompt, 100)
+        val body = raw.substringAfter("{", "").let { if (it.isNotEmpty()) "{$it" else raw }
+            .substringBeforeLast("}", "") + "}"
+        val array = JSONObject(body).optJSONArray("ranking") ?: return candidates
+        val orderedIndices = (0 until array.length()).map { array.optInt(it, -1) }
+            .filter { it in candidates.indices }.distinct()
+        if (orderedIndices.isEmpty()) return candidates
+        val result = orderedIndices.mapIndexed { rank, index ->
+            candidates[index].copy(
+                score = (99f - rank * (35f / candidates.size)).coerceAtLeast(50f),
+                reasonWhySelected = "Ranked by on-device Qwen from transcript content"
+            )
+        }.toMutableList()
+        candidates.forEachIndexed { index, candidate ->
+            if (index !in orderedIndices) result.add(candidate)
+        }
+        return result
+    }
+
     suspend fun generateMetadata(
         context: Context,
         transcript: String,
