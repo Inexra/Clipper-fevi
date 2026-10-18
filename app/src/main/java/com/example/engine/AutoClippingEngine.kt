@@ -29,74 +29,50 @@ object AutoClippingEngine {
         val aspectRatio: AspectRatio = AspectRatio.VERTICAL_9_16
     )
 
-    /**
-     * Executes the 12-step automated clipping pipeline:
-     * Discovers top viral candidate clips based on speech boundaries, hooks, completeness,
-     * non-maximum suppression (deduplication), and boundary snapping.
-     */
     fun findBestMoments(
         projectId: Long,
         totalDurationMs: Long,
         segments: List<TranscriptSegment>,
         config: ClippingConfig
     ): List<ClipCandidate> {
+        if (totalDurationMs <= 0L || config.clipCount <= 0) return emptyList()
         if (segments.isEmpty() || totalDurationMs <= 5000) {
             return generateFallbackClips(projectId, totalDurationMs, config.clipCount, config.aspectRatio)
         }
 
-        val minMs = config.minDurationSec * 1000L
-        val maxMs = config.maxDurationSec * 1000L
+        val minMs = config.minDurationSec.coerceAtLeast(1) * 1000L
+        val maxMs = max(minMs, config.maxDurationSec.coerceAtLeast(config.minDurationSec) * 1000L)
+        val orderedSegments = segments
+            .filter { it.startMs >= 0L && it.endMs > it.startMs && it.startMs < totalDurationMs }
+            .map { it.copy(endMs = min(it.endMs, totalDurationMs)) }
+            .sortedBy { it.startMs }
+        if (orderedSegments.isEmpty()) {
+            return generateFallbackClips(projectId, totalDurationMs, config.clipCount, config.aspectRatio)
+        }
+
         val candidates = mutableListOf<ScoredCandidate>()
-
-        // Step 1-5: Sliding window search over transcript sentence segments
-        for (i in segments.indices) {
-            val startSegment = segments[i]
-            var currentEndMs = startSegment.endMs
+        for (i in orderedSegments.indices) {
+            val startSegment = orderedSegments[i]
             val includedSegments = mutableListOf<TranscriptSegment>()
-            includedSegments.add(startSegment)
-
-            for (j in i until segments.size) {
-                if (j > i) {
-                    val seg = segments[j]
-                    includedSegments.add(seg)
-                    currentEndMs = seg.endMs
-                }
-
-                val currentDuration = currentEndMs - startSegment.startMs
-                if (currentDuration in minMs..maxMs) {
-                    val scoreResult = scoreCandidate(includedSegments, config.style, config.prioritizeSpeechOverScene)
-                    candidates.add(
-                        ScoredCandidate(
-                            startMs = startSegment.startMs,
-                            endMs = currentEndMs,
-                            score = scoreResult.score,
-                            reason = scoreResult.reason,
-                            title = scoreResult.title,
-                            segments = includedSegments.toList()
-                        )
-                    )
-                } else if (currentDuration > maxMs) {
-                    break
-                }
+            for (j in i until orderedSegments.size) {
+                val seg = orderedSegments[j]
+                if (j > i) includedSegments.add(seg) else includedSegments.add(startSegment)
+                val duration = seg.endMs - startSegment.startMs
+                if (duration in minMs..maxMs) {
+                    val result = scoreCandidate(includedSegments, config.style, config.prioritizeSpeechOverScene)
+                    candidates.add(ScoredCandidate(startSegment.startMs, seg.endMs, result.score, result.reason, result.title, includedSegments.toList()))
+                } else if (duration > maxMs) break
             }
         }
 
-        // Step 8: Rank candidate segments
-        val sorted = candidates.sortedByDescending { it.score }
-
-        // Step 9: Deduplicate and avoid excessive overlap (Non-Maximum Suppression)
         val selected = mutableListOf<ScoredCandidate>()
-        for (cand in sorted) {
+        for (cand in candidates.sortedByDescending { it.score }) {
             val overlaps = selected.any { existing ->
-                val overlapStart = max(cand.startMs, existing.startMs)
-                val overlapEnd = min(cand.endMs, existing.endMs)
-                val overlapMs = max(0L, overlapEnd - overlapStart)
-                val minDur = min(cand.endMs - cand.startMs, existing.endMs - existing.startMs)
-                overlapMs > (minDur * 0.40f) // Max 40% overlap allowed
+                val overlap = max(0L, min(cand.endMs, existing.endMs) - max(cand.startMs, existing.startMs))
+                val shorter = min(cand.endMs - cand.startMs, existing.endMs - existing.startMs)
+                shorter > 0L && overlap > shorter * 0.40f
             }
-            if (!overlaps) {
-                selected.add(cand)
-            }
+            if (!overlaps) selected.add(cand)
             if (selected.size >= config.clipCount) break
         }
 
@@ -104,162 +80,120 @@ object AutoClippingEngine {
             return generateFallbackClips(projectId, totalDurationMs, config.clipCount, config.aspectRatio)
         }
 
-        // Step 10-12: Snap boundaries, assign IDs, generate titles
         return selected.mapIndexed { index, cand ->
-            val snappedStart = max(0L, cand.startMs - 200L) // Include breathing room
-            val snappedEnd = min(totalDurationMs, cand.endMs + 300L)
-            val srt = SubtitleGenerator.toSrt(cand.segments, snappedStart)
-
+            val start = max(0L, cand.startMs - 200L)
+            val end = min(totalDurationMs, cand.endMs + 300L)
             ClipCandidate(
                 id = UUID.randomUUID().toString(),
                 projectId = projectId,
-                title = cand.title.ifBlank { "Clip #${index + 1}: ${config.style.title.substringBefore("/")}" },
-                startMs = snappedStart,
-                endMs = snappedEnd,
-                durationMs = snappedEnd - snappedStart,
+                title = cand.title.ifBlank { "Highlight Clip #${index + 1}" },
+                startMs = start,
+                endMs = end,
+                durationMs = end - start,
                 reasonWhySelected = cand.reason,
                 score = cand.score,
                 aspectRatio = config.aspectRatio,
                 status = ClipStatus.DISCOVERED,
                 subtitles = cand.segments,
-                srtContent = srt
+                srtContent = SubtitleGenerator.toSrt(cand.segments, start)
             )
         }
     }
 
-    /**
-     * Custom Length Maker implementation:
-     * - Smart AI Mode: Finds segments that naturally end around the target duration.
-     * - Sequential Mode: Splits contiguous duration blocks.
-     */
     fun createCustomDurationClips(
         projectId: Long,
         totalDurationMs: Long,
         segments: List<TranscriptSegment>,
         config: CustomDurationConfig
     ): List<ClipCandidate> {
-        val targetMs = config.targetDurationSec * 1000L
+        if (totalDurationMs <= 0L || config.clipCount <= 0) return emptyList()
+        val targetMs = config.targetDurationSec.coerceAtLeast(1) * 1000L
 
         if (config.mode == CustomLengthMode.SEQUENTIAL) {
             val result = mutableListOf<ClipCandidate>()
             var cursor = 0L
             var part = 1
-
             while (cursor < totalDurationMs && result.size < config.clipCount) {
                 val end = min(totalDurationMs, cursor + targetMs)
-                val subSegments = segments.filter { it.startMs in cursor..end || it.endMs in cursor..end }
-                val srt = SubtitleGenerator.toSrt(subSegments, cursor)
-
-                result.add(
-                    ClipCandidate(
-                        id = UUID.randomUUID().toString(),
-                        projectId = projectId,
-                        title = "Part $part (${config.targetDurationSec}s Segment)",
-                        startMs = cursor,
-                        endMs = end,
-                        durationMs = end - cursor,
-                        reasonWhySelected = "Sequential ${config.targetDurationSec}s continuous section",
-                        score = 80f - (part * 2f),
-                        aspectRatio = config.aspectRatio,
-                        status = ClipStatus.DISCOVERED,
-                        subtitles = subSegments,
-                        srtContent = srt
-                    )
-                )
+                val subSegments = segments.filter { it.startMs < end && it.endMs > cursor }
+                result.add(ClipCandidate(
+                    id = UUID.randomUUID().toString(), projectId = projectId,
+                    title = "Part $part (${config.targetDurationSec}s Segment)",
+                    startMs = cursor, endMs = end, durationMs = end - cursor,
+                    reasonWhySelected = "Sequential ${config.targetDurationSec}s continuous section",
+                    score = 80f - part * 2f, aspectRatio = config.aspectRatio,
+                    status = ClipStatus.DISCOVERED, subtitles = subSegments,
+                    srtContent = SubtitleGenerator.toSrt(subSegments, cursor)
+                ))
                 cursor = end
                 part++
             }
             return result
         }
 
-        // SMART_AI Mode for Custom Duration
+        if (segments.isEmpty()) {
+            return generateFallbackClips(projectId, totalDurationMs, config.clipCount, config.aspectRatio, targetMs)
+        }
+
         val toleranceMs = (targetMs * 0.20f).toLong().coerceIn(2000L, 8000L)
         val minTargetMs = max(5000L, targetMs - toleranceMs)
         val maxTargetMs = targetMs + toleranceMs
+        val ordered = segments.filter { it.endMs > it.startMs && it.startMs < totalDurationMs }
+            .sortedBy { it.startMs }
+        val candidates = mutableListOf<ScoredCandidate>()
 
-        val candidateList = mutableListOf<ScoredCandidate>()
-
-        for (i in segments.indices) {
-            val startSeg = segments[i]
+        for (i in ordered.indices) {
+            val startSeg = ordered[i]
             val included = mutableListOf<TranscriptSegment>()
-            included.add(startSeg)
-
-            for (j in i until segments.size) {
-                if (j > i) included.add(segments[j])
+            for (j in i until ordered.size) {
+                included.add(ordered[j])
                 val dur = included.last().endMs - startSeg.startMs
                 if (dur in minTargetMs..maxTargetMs) {
                     val delta = abs(dur - targetMs).toFloat() / targetMs
-                    val baseScore = 90f - (delta * 30f)
-                    val firstText = startSeg.text.lowercase()
-                    val hasHook = firstText.startsWith("why") || firstText.startsWith("how") ||
-                            firstText.contains("secret") || firstText.contains("important")
-                    val score = (baseScore + if (hasHook) 8f else 0f).coerceIn(50f, 99f)
-
-                    val reason = if (abs(dur - targetMs) < 1500) {
-                        "Complete sentence ending exactly at ${dur / 1000}s"
-                    } else {
-                        "Self-contained thought preserved near ${config.targetDurationSec}s"
+                    val hook = startSeg.text.lowercase().let { text ->
+                        listOf("why", "how", "secret", "important", "never", "watch", "wait").any(text::contains)
                     }
-
-                    candidateList.add(
-                        ScoredCandidate(
-                            startMs = startSeg.startMs,
-                            endMs = included.last().endMs,
-                            score = score,
-                            reason = reason,
-                            title = "Highlight: ${startSeg.text.take(30)}...",
-                            segments = included.toList()
-                        )
-                    )
-                } else if (dur > maxTargetMs) {
-                    break
-                }
+                    candidates.add(ScoredCandidate(
+                        startMs = startSeg.startMs,
+                        endMs = included.last().endMs,
+                        score = (90f - delta * 30f + if (hook) 8f else 0f).coerceIn(50f, 99f),
+                        reason = "Transcript window near ${config.targetDurationSec}s target",
+                        title = startSeg.text.take(40).ifBlank { "Highlight" },
+                        segments = included.toList()
+                    ))
+                } else if (dur > maxTargetMs) break
             }
         }
 
-        val sorted = candidateList.sortedByDescending { it.score }
-        val filtered = mutableListOf<ScoredCandidate>()
-
-        for (cand in sorted) {
-            val hasHeavyOverlap = filtered.any { existing ->
-                val oStart = max(cand.startMs, existing.startMs)
-                val oEnd = min(cand.endMs, existing.endMs)
-                max(0L, oEnd - oStart) > ((cand.endMs - cand.startMs) * 0.40f)
+        val selected = mutableListOf<ScoredCandidate>()
+        for (cand in candidates.sortedByDescending { it.score }) {
+            val overlaps = selected.any { existing ->
+                val overlap = max(0L, min(cand.endMs, existing.endMs) - max(cand.startMs, existing.startMs))
+                val shorter = min(cand.endMs - cand.startMs, existing.endMs - existing.startMs)
+                shorter > 0L && overlap > shorter * 0.40f
             }
-            if (!hasHeavyOverlap) {
-                filtered.add(cand)
-            }
-            if (filtered.size >= config.clipCount) break
+            if (!overlaps) selected.add(cand)
+            if (selected.size >= config.clipCount) break
+        }
+        if (selected.isEmpty()) {
+            return generateFallbackClips(projectId, totalDurationMs, config.clipCount, config.aspectRatio, targetMs)
         }
 
-        if (filtered.isEmpty()) {
-            return generateFallbackClips(projectId, totalDurationMs, config.clipCount, config.aspectRatio)
-        }
-
-        return filtered.mapIndexed { idx, cand ->
-            val srt = SubtitleGenerator.toSrt(cand.segments, cand.startMs)
+        return selected.mapIndexed { idx, cand ->
             ClipCandidate(
-                id = UUID.randomUUID().toString(),
-                projectId = projectId,
+                id = UUID.randomUUID().toString(), projectId = projectId,
                 title = "Clip ${idx + 1} (${config.targetDurationSec}s Target)",
-                startMs = cand.startMs,
-                endMs = cand.endMs,
+                startMs = cand.startMs, endMs = cand.endMs,
                 durationMs = cand.endMs - cand.startMs,
-                reasonWhySelected = cand.reason,
-                score = cand.score,
-                aspectRatio = config.aspectRatio,
-                status = ClipStatus.DISCOVERED,
+                reasonWhySelected = cand.reason, score = cand.score,
+                aspectRatio = config.aspectRatio, status = ClipStatus.DISCOVERED,
                 subtitles = cand.segments,
-                srtContent = srt
+                srtContent = SubtitleGenerator.toSrt(cand.segments, cand.startMs)
             )
         }
     }
 
-    private data class ScoreEvaluation(
-        val score: Float,
-        val reason: String,
-        val title: String
-    )
+    private data class ScoreEvaluation(val score: Float, val reason: String, val title: String)
 
     private fun scoreCandidate(
         segments: List<TranscriptSegment>,
@@ -270,105 +204,67 @@ object AutoClippingEngine {
         val last = segments.last()
         val firstText = first.text.lowercase()
         val lastText = last.text.lowercase()
-
         var score = 70f
-        var reason = "Self-contained explanation"
-        var title = first.text.take(35).replace("\"", "") + "..."
+        var reason = "Self-contained transcript segment"
+        var title = first.text.take(35).replace("\"", "") + if (first.text.length > 35) "…" else ""
 
-        // Opening hook detection
-        val hookWords = listOf("why", "how", "secret", "never", "always", "stop", "biggest", "look", "watch", "wait", "remember")
-        val hasHookWord = hookWords.any { firstText.contains(it) }
-
-        if (first.hookScore > 80f || hasHookWord) {
+        val hooks = listOf("why", "how", "secret", "never", "always", "stop", "biggest", "look", "watch", "wait", "remember", "did you know")
+        if (first.hookScore > 80f || hooks.any(firstText::contains)) {
             score += 15f
             reason = "Strong opening statement & hook"
         }
-
-        // Punctuation and completeness detection
-        val endsCleanly = lastText.endsWith(".") || lastText.endsWith("!") || lastText.endsWith("?")
-        if (endsCleanly) {
-            score += 8f
-        }
-
-        // Energy level
-        val avgEnergy = segments.map { it.speechEnergy }.average().toFloat()
-        if (avgEnergy > 0.65f) {
-            score += 6f
-            if (reason.contains("hook")) {
-                reason = "High speech energy with impactful hook"
-            }
-        }
-
-        // Style matching
+        if (lastText.endsWith(".") || lastText.endsWith("!") || lastText.endsWith("?")) score += 8f
+        val energy = segments.map { it.speechEnergy }.average().toFloat()
+        if (prioritizeSpeech && energy > 0.65f) score += 6f
         when (style) {
-            ContentStyle.FACTS -> {
-                if (firstText.contains("fact") || firstText.contains("know") || firstText.contains("did you")) {
-                    score += 10f
-                    reason = "Reveals fascinating fact"
-                }
-            }
-            ContentStyle.EDUCATIONAL -> {
-                if (firstText.contains("step") || firstText.contains("how to") || firstText.contains("learn")) {
-                    score += 10f
-                    reason = "Clear instructional takeaway"
-                }
-            }
-            ContentStyle.PODCAST -> {
-                if (segments.size >= 4) {
-                    score += 8f
-                    reason = "Engaging conversation flow"
-                }
-            }
-            ContentStyle.MOTIVATIONAL -> {
-                if (avgEnergy > 0.70f) {
-                    score += 10f
-                    reason = "Powerful motivational quote"
-                }
-            }
-            ContentStyle.COMEDY -> {
-                if (lastText.contains("!") || avgEnergy > 0.75f) {
-                    score += 8f
-                    reason = "Punchline and reaction peak"
-                }
-            }
-            else -> {}
+            ContentStyle.FACTS -> if (listOf("fact", "know", "did you", "discovered").any(firstText::contains)) { score += 10f; reason = "Potential fact reveal" }
+            ContentStyle.EDUCATIONAL -> if (listOf("step", "how to", "learn", "explain").any(firstText::contains)) { score += 10f; reason = "Instructional takeaway" }
+            ContentStyle.PODCAST -> if (segments.size >= 4) score += 8f
+            ContentStyle.MOTIVATIONAL -> if (energy > 0.70f) score += 10f
+            ContentStyle.COMEDY -> if (lastText.contains("!") || energy > 0.75f) score += 8f
+            else -> Unit
         }
-
-        return ScoreEvaluation(
-            score = score.coerceIn(50f, 98.5f),
-            reason = reason,
-            title = title
-        )
+        return ScoreEvaluation(score.coerceIn(50f, 98.5f), reason, title)
     }
 
+    /**
+     * Safe fallback when no transcript windows are available. Evenly samples the timeline
+     * instead of packing all fallback clips into the first minute of the source.
+     */
     private fun generateFallbackClips(
         projectId: Long,
         totalDurationMs: Long,
         count: Int,
-        aspectRatio: AspectRatio
+        aspectRatio: AspectRatio,
+        requestedDurationMs: Long = 30000L
     ): List<ClipCandidate> {
+        if (totalDurationMs <= 0L || count <= 0) return emptyList()
+        val slotMs = (totalDurationMs / count).coerceAtLeast(1L)
+        val clipLength = min(requestedDurationMs.coerceAtLeast(1000L), slotMs)
         val list = mutableListOf<ClipCandidate>()
-        val clipLen = min(totalDurationMs / count.coerceAtLeast(1), 30000L).coerceAtLeast(5000L)
 
         for (i in 0 until count) {
-            val s = i * clipLen
-            val e = min(totalDurationMs, s + clipLen)
-            if (s >= totalDurationMs) break
+            val slotStart = i * slotMs
+            if (slotStart >= totalDurationMs) break
+            val slotEnd = min(totalDurationMs, slotStart + slotMs)
+            val available = slotEnd - slotStart
+            val length = min(clipLength, available)
+            val start = slotStart + ((available - length) / 2L)
+            val end = min(totalDurationMs, start + length)
+            if (end <= start) continue
 
-            list.add(
-                ClipCandidate(
-                    id = UUID.randomUUID().toString(),
-                    projectId = projectId,
-                    title = "Highlight Clip #${i + 1}",
-                    startMs = s,
-                    endMs = e,
-                    durationMs = e - s,
-                    reasonWhySelected = "High-energy video section",
-                    score = 85f - (i * 3f),
-                    aspectRatio = aspectRatio,
-                    status = ClipStatus.DISCOVERED
-                )
-            )
+            list.add(ClipCandidate(
+                id = UUID.randomUUID().toString(),
+                projectId = projectId,
+                title = "Timeline Sample #${i + 1}",
+                startMs = start,
+                endMs = end,
+                durationMs = end - start,
+                reasonWhySelected = "Distributed fallback sample; speech analysis was unavailable",
+                score = 50f,
+                aspectRatio = aspectRatio,
+                status = ClipStatus.DISCOVERED
+            ))
         }
         return list
     }
