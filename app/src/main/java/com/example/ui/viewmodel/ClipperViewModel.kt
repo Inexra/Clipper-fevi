@@ -256,7 +256,7 @@ class ClipperViewModel(application: Application) : AndroidViewModel(application)
 
                 val enriched = candidates.mapIndexed { idx, clip ->
                     val transcriptForClip = clip.subtitles.joinToString(" ") { it.text }
-                    val meta = if (LocalQwenEngine.isModelDownloaded(getApplication())) {
+                    val meta = if (LocalQwenEngine.isModelAvailable(getApplication())) {
                         runCatching {
                             LocalQwenEngine.generateMetadata(getApplication(), transcriptForClip, clip.title)
                         }.getOrElse {
@@ -341,7 +341,7 @@ class ClipperViewModel(application: Application) : AndroidViewModel(application)
 
                 val enriched = clips.map { clip ->
                     val transcriptForClip = clip.subtitles.joinToString(" ") { it.text }
-                    val meta = if (LocalQwenEngine.isModelDownloaded(getApplication())) {
+                    val meta = if (LocalQwenEngine.isModelAvailable(getApplication())) {
                         runCatching {
                             LocalQwenEngine.generateMetadata(getApplication(), transcriptForClip, clip.title)
                         }.getOrElse {
@@ -406,7 +406,7 @@ class ClipperViewModel(application: Application) : AndroidViewModel(application)
         val clip = _selectedClip.value ?: return
         viewModelScope.launch {
             val transcriptText = clip.subtitles.joinToString(" ") { it.text }
-            val newMeta = if (LocalQwenEngine.isModelDownloaded(getApplication())) {
+            val newMeta = if (LocalQwenEngine.isModelAvailable(getApplication())) {
                 runCatching {
                     LocalQwenEngine.generateMetadata(getApplication(), transcriptText, clip.title)
                 }.getOrElse { LocalMetadataGenerator.generate(clip.subtitles, tone) }
