@@ -53,10 +53,10 @@ object AudioSpeechEngine {
         try {
             onProgress("Extracting audio stream...", 0.15f)
 
-            // Never invent dialogue from waveform energy or a text-only Gemini prompt.
-            // A real offline ASR model is not yet bundled or initialized in this repository.
-            onProgress("No speech-recognition model configured", 0.85f)
-            val segments = emptyList<TranscriptSegment>()
+            // Real offline Whisper transcription. The model downloads once, then runs locally.
+            val segments = OfflineWhisperEngine.transcribeVideo(context, videoUri, language) { step, progress ->
+                onProgress(step, progress)
+            }
 
             onProgress("Synthesizing word-level timings...", 0.85f)
             delay(150)
