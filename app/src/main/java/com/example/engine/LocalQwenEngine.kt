@@ -1,6 +1,7 @@
 package com.example.engine
 
 import android.content.Context
+import com.example.data.model.ClipCandidate
 import dev.ffmpegkit.llama.Llama
 import dev.ffmpegkit.llama.LlamaConfig
 import kotlinx.coroutines.Dispatchers
@@ -20,7 +21,7 @@ object LocalQwenEngine {
         "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf?download=true"
 
     fun modelFile(context: Context): File =
-        File(File(context.getExternalFilesDir("models") ?: context.filesDir, "models"), MODEL_NAME)
+        File(context.getExternalFilesDir(null) ?: context.filesDir, "models/$MODEL_NAME")
 
     fun isModelDownloaded(context: Context): Boolean {
         val file = modelFile(context)
